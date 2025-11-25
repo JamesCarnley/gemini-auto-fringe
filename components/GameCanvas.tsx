@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { GameState, EntityType, Entity, Vector2, GameEventType } from '../types';
+import { GameState, EntityType, Entity, Vector2, GameEventType, ActiveEffect, PowerUpType } from '../types';
 import { createPlayer, createAsteroid, updateGame } from '../services/gameLogic';
-import { CANVAS_WIDTH, CANVAS_HEIGHT, ARENA_RADIUS, COLOR_PALETTE, SVG_PATHS } from '../constants';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, ARENA_RADIUS, COLOR_PALETTE, SVG_PATHS, POWERUP_COLORS } from '../constants';
 import { dist, randomRange } from '../utils/math';
 
 // --- Sound Engine ---
@@ -172,6 +172,44 @@ class AudioController {
         osc.start(t);
         osc.stop(t + 0.1);
     }
+
+    playPowerUp() {
+        if (!this.ctx || !this.masterGain) return;
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, t);
+        osc.frequency.exponentialRampToValueAtTime(1200, t + 0.3);
+        gain.gain.setValueAtTime(0.4, t);
+        gain.gain.linearRampToValueAtTime(0, t + 0.3);
+        
+        osc.start(t);
+        osc.stop(t + 0.3);
+    }
+
+    playNuke() {
+        if (!this.ctx || !this.masterGain) return;
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(50, t);
+        osc.frequency.linearRampToValueAtTime(2000, t + 1.0);
+        osc.frequency.exponentialRampToValueAtTime(10, t + 2.0);
+        
+        gain.gain.setValueAtTime(0.5, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 2.0);
+        
+        osc.start(t);
+        osc.stop(t + 2.0);
+    }
 }
 
 const audioController = new AudioController();
@@ -211,6 +249,7 @@ const GameCanvas: React.FC = () => {
     paused: false,
     lastTime: 0,
     events: [],
+    globalTimeScale: 1.0,
   });
 
   const [hudState, setHudState] = useState({ 
@@ -218,7 +257,8 @@ const GameCanvas: React.FC = () => {
     shield: 100, 
     health: 100, 
     wave: 1, 
-    gameOver: false 
+    gameOver: false,
+    activeEffects: [] as ActiveEffect[]
   });
 
   const [audioStarted, setAudioStarted] = useState(false);
@@ -278,7 +318,6 @@ const GameCanvas: React.FC = () => {
   }, []);
 
   const handleClick = () => {
-    // 1. Initialize Audio if needed
     if (!audioStarted) {
         audioController.init();
         if (audioController.ctx && audioController.ctx.state === 'suspended') {
@@ -286,8 +325,6 @@ const GameCanvas: React.FC = () => {
         }
         setAudioStarted(true);
     } 
-    
-    // 2. Toggle Zoom (only if game is running/ready)
     setZoomLevel(prev => prev === 1.0 ? 0.5 : 1.0);
   };
 
@@ -302,7 +339,6 @@ const GameCanvas: React.FC = () => {
 
     // Metallic Gradient Fill
     const grad = ctx.createLinearGradient(-e.radius, -e.radius, e.radius, e.radius);
-    // Darker version of color
     grad.addColorStop(0, '#ffffff');
     grad.addColorStop(0.3, e.color);
     grad.addColorStop(1, '#000000');
@@ -311,19 +347,15 @@ const GameCanvas: React.FC = () => {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1.5;
 
-    // Use cached Path2D if available
     const path = pathsRef.current[e.type];
 
     if (path) {
-        // CORRECTION: SVG paths are drawn facing Up (-Y). 
-        // Game math assumes 0 rotation is Right (+X).
-        // Rotate 90 degrees (PI/2) to align Visual Up with Math Right.
+        // Fix rotation
         ctx.rotate(Math.PI / 2);
-
         ctx.fill(path);
         ctx.stroke(path);
         
-        // Engine Glow for Player
+        // Engine Glow
         if (e.type === EntityType.PLAYER && e.thrusting) {
             ctx.shadowColor = '#ffaa00';
             ctx.shadowBlur = 20;
@@ -335,8 +367,6 @@ const GameCanvas: React.FC = () => {
             ctx.fill();
         }
     } else {
-        // Procedural fallbacks (Mines, Asteroids, Projectiles)
-        
         if (e.type === EntityType.MINE) {
             ctx.beginPath();
             ctx.arc(0, 0, 8, 0, Math.PI * 2);
@@ -344,7 +374,6 @@ const GameCanvas: React.FC = () => {
             ctx.fill();
             ctx.strokeStyle = '#ff3333';
             ctx.stroke();
-            // Spikes
             for (let i = 0; i < 8; i++) {
                 ctx.rotate(Math.PI / 4);
                 ctx.beginPath();
@@ -352,7 +381,6 @@ const GameCanvas: React.FC = () => {
                 ctx.lineTo(14, 0);
                 ctx.stroke();
             }
-            // Blinking Core
             if (Math.floor(Date.now() / 200) % 2 === 0) {
                  ctx.beginPath();
                  ctx.arc(0, 0, 4, 0, Math.PI * 2);
@@ -360,8 +388,42 @@ const GameCanvas: React.FC = () => {
                  ctx.fill();
             }
         } 
+        else if (e.type === EntityType.POWERUP) {
+            // Pulsing Diamond
+            const pulse = 1 + Math.sin(Date.now() * 0.01) * 0.2;
+            ctx.scale(pulse, pulse);
+            
+            ctx.fillStyle = e.color;
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(10, 0);
+            ctx.lineTo(0, 10);
+            ctx.lineTo(-10, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Symbol
+            ctx.fillStyle = '#000';
+            ctx.font = "bold 12px monospace";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            
+            let symbol = "?";
+            if (e.powerUpType === PowerUpType.HEALTH_PACK) symbol = "+";
+            if (e.powerUpType === PowerUpType.SHIELD_OVERCHARGE) symbol = "S";
+            if (e.powerUpType === PowerUpType.RAPID_FIRE) symbol = "R";
+            if (e.powerUpType === PowerUpType.SCATTER_SHOT) symbol = "W";
+            if (e.powerUpType === PowerUpType.TIME_WARP) symbol = "T";
+            if (e.powerUpType === PowerUpType.OMEGA_BLAST) symbol = "!";
+            
+            ctx.fillText(symbol, 0, 0);
+        }
         else if (e.type === EntityType.ASTEROID) {
-            ctx.shadowBlur = 0; // No glow for rocks
+            ctx.shadowBlur = 0;
             ctx.fillStyle = '#222';
             ctx.strokeStyle = '#555';
             ctx.beginPath();
@@ -379,10 +441,9 @@ const GameCanvas: React.FC = () => {
             ctx.fillStyle = e.color;
             ctx.shadowBlur = 10;
             ctx.beginPath();
-            // Elongated bolt
             ctx.ellipse(0, 0, 8, 3, 0, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = '#fff'; // Bright core
+            ctx.fillStyle = '#fff';
             ctx.beginPath();
             ctx.arc(0, 0, 2, 0, Math.PI * 2);
             ctx.fill();
@@ -397,7 +458,6 @@ const GameCanvas: React.FC = () => {
         }
     }
 
-    // Shield Bubble (Overlay) - Restore rotation if we modified it for SVG
     if (path) {
          ctx.rotate(-Math.PI / 2);
     }
@@ -405,7 +465,7 @@ const GameCanvas: React.FC = () => {
     if (e.shield && e.shield > 20) {
         ctx.shadowBlur = 5;
         ctx.shadowColor = COLOR_PALETTE.playerShield;
-        ctx.strokeStyle = `rgba(0, 255, 204, ${e.shield / 200})`;
+        ctx.strokeStyle = `rgba(0, 255, 204, ${Math.min(1, e.shield / 150)})`;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(0, 0, e.radius + 8, 0, Math.PI * 2);
@@ -416,19 +476,15 @@ const GameCanvas: React.FC = () => {
   };
 
   const drawStarfield = (ctx: CanvasRenderingContext2D, camera: Vector2) => {
-    // 0. Base Deep Space Fill
     const bgGrad = ctx.createRadialGradient(CANVAS_WIDTH/2, CANVAS_HEIGHT/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_WIDTH);
     bgGrad.addColorStop(0, '#0f1220');
     bgGrad.addColorStop(1, '#000000');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // 1. Nebulae (Deep parallax)
     ctx.save();
-    // Parallax logic remains largely screen-space based
     ctx.translate(-camera.x * 0.1 + CANVAS_WIDTH / 2, -camera.y * 0.1 + CANVAS_HEIGHT / 2);
     nebulaeRef.current.forEach(n => {
-        // Culling
         const screenX = n.x - camera.x * 0.1;
         const screenY = n.y - camera.y * 0.1;
         if (Math.abs(screenX) > CANVAS_WIDTH + n.radius && Math.abs(screenY) > CANVAS_HEIGHT + n.radius) return;
@@ -443,19 +499,14 @@ const GameCanvas: React.FC = () => {
     });
     ctx.restore();
 
-    // 2. Starfield
     ctx.save();
-    // Parallax: Move stars slower than camera (0.5 factor)
     ctx.translate(-camera.x * 0.5 + CANVAS_WIDTH / 2, -camera.y * 0.5 + CANVAS_HEIGHT / 2);
-    
     ctx.fillStyle = '#fff';
     starsRef.current.forEach((star, i) => {
-        // Simple culling if way off screen
         const screenX = star.x - camera.x * 0.5;
         const screenY = star.y - camera.y * 0.5;
         if (Math.abs(screenX) > CANVAS_WIDTH && Math.abs(screenY) > CANVAS_HEIGHT) return;
 
-        // Twinkle
         const twinkle = Math.sin(Date.now() * 0.005 + i) * 0.2 + 0.8;
         ctx.globalAlpha = star.opacity * twinkle;
         ctx.beginPath();
@@ -467,11 +518,8 @@ const GameCanvas: React.FC = () => {
   };
 
   const drawGridAndWorld = (ctx: CanvasRenderingContext2D, state: GameState, zoom: number) => {
-    // 3. Grid (World locked) - More subtle
     const gridSize = 150;
     
-    // We are in World Space here due to outer transform, so we can draw lines across the arena
-    // Visible World Bounds
     const visibleWidth = CANVAS_WIDTH / zoom;
     const visibleHeight = CANVAS_HEIGHT / zoom;
     const left = state.camera.x - visibleWidth / 2;
@@ -482,9 +530,7 @@ const GameCanvas: React.FC = () => {
     const startX = Math.floor(left / gridSize) * gridSize;
     const startY = Math.floor(top / gridSize) * gridSize;
 
-    ctx.strokeStyle = 'rgba(0, 255, 255, 0.08)'; // Very subtle cyan
-    ctx.lineWidth = 1; // Keep thin even if zoomed? No, in world space 1 is 1 unit.
-    // To keep line width consistent on screen (1px), we divide by zoom
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.08)';
     ctx.lineWidth = 1 / zoom; 
 
     ctx.beginPath();
@@ -498,14 +544,12 @@ const GameCanvas: React.FC = () => {
     }
     ctx.stroke();
 
-    // 4. Arena Boundary
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
     ctx.strokeStyle = '#ff0055';
     ctx.lineWidth = 3 / zoom;
-    ctx.setLineDash([20, 20]); // Dashed border
+    ctx.setLineDash([20, 20]);
     ctx.stroke();
-    // Inner Glow
     ctx.shadowBlur = 30;
     ctx.shadowColor = '#ff0055';
     ctx.beginPath();
@@ -514,7 +558,7 @@ const GameCanvas: React.FC = () => {
     ctx.strokeStyle = 'rgba(255, 0, 85, 0.5)';
     ctx.setLineDash([]);
     ctx.stroke();
-    ctx.shadowBlur = 0; // Reset
+    ctx.shadowBlur = 0;
   };
 
   const drawRadar = (ctx: CanvasRenderingContext2D, state: GameState) => {
@@ -523,7 +567,6 @@ const GameCanvas: React.FC = () => {
     const radarY = radarSize + 20;
     const scale = radarSize / ARENA_RADIUS;
 
-    // Background with gradient
     const grad = ctx.createRadialGradient(radarX, radarY, 0, radarX, radarY, radarSize);
     grad.addColorStop(0, 'rgba(0, 40, 20, 0.9)');
     grad.addColorStop(1, 'rgba(0, 10, 5, 0.9)');
@@ -536,19 +579,15 @@ const GameCanvas: React.FC = () => {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Radar rings
     ctx.strokeStyle = 'rgba(0, 255, 100, 0.2)';
     ctx.beginPath(); ctx.arc(radarX, radarY, radarSize * 0.5, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(radarX, radarY, radarSize * 0.25, 0, Math.PI * 2); ctx.stroke();
 
-    // Entities
     [state.player, ...state.entities].forEach(e => {
-        if(e.isDead && e.type !== EntityType.PLAYER) return; // Show dead player marker
-        // Project onto radar
+        if(e.isDead && e.type !== EntityType.PLAYER) return;
         const rx = e.position.x * scale;
         const ry = e.position.y * scale;
         
-        // Clip to radar radius
         if (Math.sqrt(rx*rx + ry*ry) > radarSize) return;
 
         const x = radarX + rx;
@@ -556,10 +595,10 @@ const GameCanvas: React.FC = () => {
 
         ctx.fillStyle = e.color;
         if (e.type === EntityType.PLAYER) ctx.fillStyle = '#fff';
+        if (e.type === EntityType.POWERUP) ctx.fillStyle = '#ffff00'; // Bright on radar
         
         ctx.beginPath();
         if (e.type === EntityType.PLAYER) {
-             // Draw small arrow for player
              ctx.save();
              ctx.translate(x, y);
              ctx.rotate(e.rotation);
@@ -576,7 +615,6 @@ const GameCanvas: React.FC = () => {
   };
 
   const processEvents = (state: GameState) => {
-      // Limit events per frame to prevent audio overload/crash
       let shootCount = 0;
       let explosionCount = 0;
       let impactCount = 0;
@@ -604,6 +642,12 @@ const GameCanvas: React.FC = () => {
               case GameEventType.GAME_OVER:
                   audioController.playExplosion();
                   break;
+              case GameEventType.POWERUP_COLLECT:
+                  audioController.playPowerUp();
+                  break;
+              case GameEventType.NUKE_TRIGGERED:
+                  audioController.playNuke();
+                  break;
           }
       });
       state.events = [];
@@ -617,57 +661,43 @@ const GameCanvas: React.FC = () => {
     if (!ctx) return;
     const state = gameStateRef.current;
 
-    // 1. Process Logic
     updateGame(state);
     
-    // 2. Process Audio
     if (audioStarted) {
         processEvents(state);
     } else {
         state.events = [];
     }
 
-    // Camera follow player
     state.camera.x = state.player.position.x;
     state.camera.y = state.player.position.y;
 
-    // Draw Background (Screen Space)
     drawStarfield(ctx, state.camera);
 
-    // World Transforms with ZOOM
     ctx.save();
-    
-    // 1. Move origin to center of screen
     ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
-    // 2. Apply Scale
     ctx.scale(zoomLevel, zoomLevel);
-    // 3. Move world so camera is at origin
     ctx.translate(-state.camera.x, -state.camera.y);
 
-    // Draw Grid & Boundaries
     drawGridAndWorld(ctx, state, zoomLevel);
 
-    // Draw Layers
     state.particles.forEach(p => drawEntity(ctx, p));
     state.projectiles.forEach(p => drawEntity(ctx, p));
     state.entities.forEach(e => drawEntity(ctx, e));
-    
-    // Draw player
     drawEntity(ctx, state.player);
 
     ctx.restore();
 
-    // UI Layer (Screen Space)
     drawRadar(ctx, state);
 
-    // Sync HUD
     if (state.lastTime % 10 === 0 || state.gameOver !== hudState.gameOver) {
       setHudState({
         score: state.score,
         shield: state.player.shield || 0,
         health: state.player.health,
         wave: state.wave,
-        gameOver: state.gameOver
+        gameOver: state.gameOver,
+        activeEffects: state.player.activeEffects ? [...state.player.activeEffects] : []
       });
     }
 
@@ -679,11 +709,10 @@ const GameCanvas: React.FC = () => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [audioStarted, zoomLevel]); // Re-bind loop if zoom changes (though ref based state helps, simpler to just rebind or rely on ref)
+  }, [audioStarted, zoomLevel]);
 
   const handleRestart = () => {
-      // Don't toggle zoom on restart, just restart
-      if (!audioStarted) handleClick(); // ensure audio
+      if (!audioStarted) handleClick();
       
       gameStateRef.current.player = createPlayer();
       gameStateRef.current.entities = [];
@@ -694,6 +723,7 @@ const GameCanvas: React.FC = () => {
       gameStateRef.current.gameOver = false;
       gameStateRef.current.lastTime = 0;
       gameStateRef.current.events = [];
+      gameStateRef.current.globalTimeScale = 1.0;
       
       for (let i = 0; i < 30; i++) {
         const r = Math.random() * ARENA_RADIUS;
@@ -706,8 +736,7 @@ const GameCanvas: React.FC = () => {
         }
       }
       
-      // Force UI update immediately
-      setHudState({ score: 0, shield: 100, health: 100, wave: 1, gameOver: false });
+      setHudState({ score: 0, shield: 100, health: 100, wave: 1, gameOver: false, activeEffects: [] });
   };
 
   return (
@@ -719,7 +748,6 @@ const GameCanvas: React.FC = () => {
         className="block w-full h-full cursor-crosshair"
       />
       
-      {/* Scanlines Effect */}
       <div className="absolute inset-0 pointer-events-none" 
            style={{
              background: 'linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06))',
@@ -733,21 +761,41 @@ const GameCanvas: React.FC = () => {
           </div>
       )}
 
-      {/* HUD */}
+      {/* HUD LEFT */}
       <div className="absolute top-4 left-4 font-mono text-green-400 select-none pointer-events-none">
         <h1 className="text-xl font-bold tracking-widest uppercase mb-2">Auto-Fringe AI</h1>
         <div className="text-sm">SECTOR: 7G</div>
         <div className="text-sm">WAVE: {hudState.wave}</div>
         <div className="text-sm mt-2">SCORE: {hudState.score.toString().padStart(6, '0')}</div>
         <div className="text-xs text-cyan-500 mt-2">ZOOM: {zoomLevel}x</div>
+        
+        {/* ACTIVE POWERUPS */}
+        <div className="mt-6 flex flex-col gap-2">
+            {hudState.activeEffects.map((eff, i) => {
+                const percent = (eff.duration / eff.maxDuration) * 100;
+                const color = POWERUP_COLORS[eff.type];
+                return (
+                    <div key={i} className="flex flex-col">
+                        <div className="flex justify-between text-xs mb-1" style={{ color: color }}>
+                            <span>{eff.type.replace('_', ' ')}</span>
+                            <span>{(eff.duration / 60).toFixed(1)}s</span>
+                        </div>
+                        <div className="w-32 h-1 bg-gray-800">
+                            <div className="h-full transition-all duration-200" 
+                                 style={{ width: `${percent}%`, backgroundColor: color, boxShadow: `0 0 5px ${color}` }}></div>
+                        </div>
+                    </div>
+                )
+            })}
+        </div>
       </div>
 
-      {/* Shield/Health Bars */}
+      {/* HUD RIGHT */}
       <div className="absolute top-4 right-4 w-64 p-4 font-mono select-none pointer-events-none flex flex-col items-end gap-2">
          <div className="w-full flex items-center justify-end gap-2">
             <span className="text-cyan-400 text-xs">SHIELD</span>
             <div className="w-32 h-2 bg-gray-800 border border-gray-600">
-                <div className="h-full bg-cyan-400 shadow-[0_0_10px_#00ffcc]" style={{ width: `${Math.max(0, hudState.shield)}%` }}></div>
+                <div className="h-full bg-cyan-400 shadow-[0_0_10px_#00ffcc]" style={{ width: `${Math.min(100, Math.max(0, hudState.shield))}%` }}></div>
             </div>
          </div>
          <div className="w-full flex items-center justify-end gap-2">

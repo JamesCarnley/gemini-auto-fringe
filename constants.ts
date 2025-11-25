@@ -1,13 +1,16 @@
+
 export const CANVAS_WIDTH = window.innerWidth;
 export const CANVAS_HEIGHT = window.innerHeight;
 export const ARENA_RADIUS = 1500;
 
 export const FRICTION = 0.98;
-export const PLAYER_ACCEL = 0.4;
+export const PLAYER_ACCEL = 0.55; // Increased from 0.4
 export const PLAYER_ROTATION_SPEED = 0.18; // Increased from 0.08 for better tracking
-export const PLAYER_MAX_SPEED = 8;
-export const PROJECTILE_SPEED = 12;
+export const PLAYER_MAX_SPEED = 9; // Slight bump
+export const PROJECTILE_SPEED = 15; // Increased from 12 to reduce dodging ease
 export const PROJECTILE_LIFETIME = 80;
+
+export const ENEMY_SPAWN_RATE = 200; // frames
 
 export const COLOR_PALETTE = {
   background: '#050505',
@@ -25,7 +28,21 @@ export const COLOR_PALETTE = {
   radarLine: '#00ff00',
 };
 
-export const ENEMY_SPAWN_RATE = 200; // frames
+// PowerUp Config
+export const POWERUP_COLORS = {
+  HEALTH_PACK: '#00ff66',    // Green
+  SHIELD_OVERCHARGE: '#00ffff', // Cyan
+  RAPID_FIRE: '#ffaa00',     // Orange
+  SCATTER_SHOT: '#ffff00',   // Yellow
+  TIME_WARP: '#aa00ff',      // Purple
+  OMEGA_BLAST: '#ff0000',    // Red
+};
+
+export const POWERUP_DURATIONS = {
+  RAPID_FIRE: 600,   // 10 seconds @ 60fps
+  SCATTER_SHOT: 900, // 15 seconds
+  TIME_WARP: 400,    // ~7 seconds
+};
 
 // SVG Path Data for entities
 export const SVG_PATHS = {

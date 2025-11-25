@@ -12,6 +12,17 @@ export const normalize = (v: Vector2): Vector2 => {
 export const dist = (v1: Vector2, v2: Vector2): number => mag(sub(v1, v2));
 export const angleBetween = (v1: Vector2, v2: Vector2): number => Math.atan2(v2.y - v1.y, v2.x - v1.x);
 
+export const dot = (v1: Vector2, v2: Vector2): number => v1.x * v2.x + v1.y * v2.y;
+
+export const limit = (v: Vector2, max: number): Vector2 => {
+  const mSquared = v.x * v.x + v.y * v.y;
+  if (mSquared > max * max && mSquared > 0) {
+    const m = Math.sqrt(mSquared);
+    return { x: (v.x / m) * max, y: (v.y / m) * max };
+  }
+  return v;
+};
+
 // Wraps angle to [-PI, PI] range using math instead of loops to prevent freezing
 export const normalizeAngle = (angle: number): number => {
   if (!Number.isFinite(angle)) return 0;
