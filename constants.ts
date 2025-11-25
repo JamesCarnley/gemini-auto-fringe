@@ -4,7 +4,7 @@ export const ARENA_RADIUS = 1500;
 
 export const FRICTION = 0.98;
 export const PLAYER_ACCEL = 0.4;
-export const PLAYER_ROTATION_SPEED = 0.08;
+export const PLAYER_ROTATION_SPEED = 0.18; // Increased from 0.08 for better tracking
 export const PLAYER_MAX_SPEED = 8;
 export const PROJECTILE_SPEED = 12;
 export const PROJECTILE_LIFETIME = 80;

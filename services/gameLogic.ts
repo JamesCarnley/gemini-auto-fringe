@@ -1,6 +1,6 @@
 import { Entity, EntityType, GameState, Vector2, GameEventType } from '../types';
 import { 
-  add, sub, mult, normalize, dist, angleBetween, mag, clampPosition, randomRange, normalizeAngle 
+  add, sub, mult, normalize, dist, angleBetween, mag, clampPosition, randomRange, normalizeAngle, predictTargetPosition 
 } from '../utils/math';
 import { 
   FRICTION, PLAYER_ACCEL, PLAYER_MAX_SPEED, PLAYER_ROTATION_SPEED, 
@@ -248,29 +248,32 @@ const updatePlayerAI = (player: Entity, state: GameState) => {
 
   // 2. Navigation
   if (nearestThreat) {
-    const angleToEnemy = angleBetween(player.position, nearestThreat.position);
-    // Use normalizeAngle for diff calculation to avoid loop freezing
-    const diff = normalizeAngle(angleToEnemy - player.rotation);
+    // Predictive Aiming: Aim where the enemy WILL be
+    const predictedPos = predictTargetPosition(player.position, nearestThreat.position, nearestThreat.velocity, PROJECTILE_SPEED);
+    const angleToTarget = angleBetween(player.position, predictedPos);
+    
+    // Calculate angle diff
+    const diff = normalizeAngle(angleToTarget - player.rotation);
     
     // Turn
     if (Math.abs(diff) > 0.1) {
       player.rotation += Math.sign(diff) * PLAYER_ROTATION_SPEED;
     } else {
-      player.rotation = angleToEnemy;
+      player.rotation = angleToTarget;
     }
 
-    // Thrust control
-    const distance = dist(player.position, nearestThreat.position);
+    // Thrust control - Drive towards the actual position to engage, not the predicted one (which might be far off screen)
+    const realDistance = dist(player.position, nearestThreat.position);
     
     // Heuristic: If far, boost. If close, maintain distance.
     const idealDistance = 300;
     
-    if (distance > idealDistance) {
+    if (realDistance > idealDistance) {
       // Accelerate towards
       const accel = { x: Math.cos(player.rotation) * PLAYER_ACCEL, y: Math.sin(player.rotation) * PLAYER_ACCEL };
       player.velocity = add(player.velocity, accel);
       player.thrusting = true;
-    } else if (distance < 150) {
+    } else if (realDistance < 150) {
       // Back off
       const accel = { x: Math.cos(player.rotation) * PLAYER_ACCEL * 0.5, y: Math.sin(player.rotation) * PLAYER_ACCEL * 0.5 };
       player.velocity = sub(player.velocity, accel);
@@ -280,7 +283,7 @@ const updatePlayerAI = (player: Entity, state: GameState) => {
     }
 
     // Shoot
-    if (Math.abs(diff) < 0.2 && distance < 700 && player.cooldown <= 0) {
+    if (Math.abs(diff) < 0.25 && realDistance < 800 && player.cooldown <= 0) {
       state.projectiles.push(createProjectile(player));
       state.events.push(GameEventType.PLAYER_SHOOT);
       player.cooldown = player.maxCooldown;
@@ -289,7 +292,6 @@ const updatePlayerAI = (player: Entity, state: GameState) => {
   } else {
     // Idle / Patrol mode: Fly to center if nothing else
     const angleToCenter = angleBetween(player.position, {x:0, y:0});
-    // Use normalizeAngle here as well
     const diff = normalizeAngle(angleToCenter - player.rotation);
 
     if (Math.abs(diff) > 0.1) {
@@ -344,13 +346,22 @@ const updateEnemyAI = (enemy: Entity, state: GameState) => {
    if (player.isDead) return;
 
    const d = dist(enemy.position, player.position);
-   const angleToPlayer = angleBetween(enemy.position, player.position);
    
-   // Normalize angle diff using math instead of loops
-   const diff = normalizeAngle(angleToPlayer - enemy.rotation);
+   // Default aim at player
+   let targetPos = player.position;
 
-   // Common Rotation Logic (turn towards player mostly)
-   const turnSpeed = enemy.type === EntityType.ENEMY_INTERCEPTOR ? 0.08 : 0.04;
+   // Smarter AI for Interceptors and Cruisers: Lead the target
+   if (enemy.type === EntityType.ENEMY_INTERCEPTOR || enemy.type === EntityType.ENEMY_CRUISER) {
+      targetPos = predictTargetPosition(enemy.position, player.position, player.velocity, PROJECTILE_SPEED);
+   }
+
+   const angleToTarget = angleBetween(enemy.position, targetPos);
+   const diff = normalizeAngle(angleToTarget - enemy.rotation);
+
+   // Common Rotation Logic
+   // Interceptors turn faster
+   const turnSpeed = enemy.type === EntityType.ENEMY_INTERCEPTOR ? 0.12 : 0.04;
+   
    enemy.rotation += Math.sign(diff) * turnSpeed;
 
    if (enemy.type === EntityType.ENEMY_SCOUT) {
@@ -404,7 +415,7 @@ const updateEnemyAI = (enemy: Entity, state: GameState) => {
            const accel = { x: Math.cos(enemy.rotation) * 0.5, y: Math.sin(enemy.rotation) * 0.5 };
            enemy.velocity = add(enemy.velocity, accel);
        } else {
-           // Break away laterally
+           // Break away laterally to orbit
            const sideAngle = enemy.rotation + Math.PI / 2;
            const accel = { x: Math.cos(sideAngle) * 0.6, y: Math.sin(sideAngle) * 0.6 };
            enemy.velocity = add(enemy.velocity, accel);
@@ -413,10 +424,10 @@ const updateEnemyAI = (enemy: Entity, state: GameState) => {
        if (mag(enemy.velocity) > speed) enemy.velocity = mult(normalize(enemy.velocity), speed);
 
        // Rapid fire when lined up
-       if (d < 600 && Math.abs(diff) < 0.2 && enemy.cooldown <= 0) {
+       if (d < 600 && Math.abs(diff) < 0.3 && enemy.cooldown <= 0) {
            state.projectiles.push(createProjectile(enemy));
            state.events.push(GameEventType.ENEMY_SHOOT);
-           enemy.cooldown = enemy.maxCooldown; // Low cooldown defined in createEnemy
+           enemy.cooldown = enemy.maxCooldown; 
        }
 
    } else if (enemy.type === EntityType.ENEMY_BOMBER) {

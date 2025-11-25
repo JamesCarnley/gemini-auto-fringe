@@ -222,6 +222,7 @@ const GameCanvas: React.FC = () => {
   });
 
   const [audioStarted, setAudioStarted] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1.0); // 1.0 = Normal, 0.5 = Zoomed Out
 
   // Initialize Paths, Stars, and Nebulae
   useEffect(() => {
@@ -276,14 +277,18 @@ const GameCanvas: React.FC = () => {
     }
   }, []);
 
-  const handleStartAudio = () => {
-      if (!audioStarted) {
-          audioController.init();
-          if (audioController.ctx && audioController.ctx.state === 'suspended') {
-              audioController.ctx.resume();
-          }
-          setAudioStarted(true);
-      }
+  const handleClick = () => {
+    // 1. Initialize Audio if needed
+    if (!audioStarted) {
+        audioController.init();
+        if (audioController.ctx && audioController.ctx.state === 'suspended') {
+            audioController.ctx.resume();
+        }
+        setAudioStarted(true);
+    } 
+    
+    // 2. Toggle Zoom (only if game is running/ready)
+    setZoomLevel(prev => prev === 1.0 ? 0.5 : 1.0);
   };
 
   const drawEntity = (ctx: CanvasRenderingContext2D, e: Entity) => {
@@ -410,7 +415,7 @@ const GameCanvas: React.FC = () => {
     ctx.restore();
   };
 
-  const drawBackground = (ctx: CanvasRenderingContext2D, camera: Vector2) => {
+  const drawStarfield = (ctx: CanvasRenderingContext2D, camera: Vector2) => {
     // 0. Base Deep Space Fill
     const bgGrad = ctx.createRadialGradient(CANVAS_WIDTH/2, CANVAS_HEIGHT/2, 0, CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_WIDTH);
     bgGrad.addColorStop(0, '#0f1220');
@@ -420,6 +425,7 @@ const GameCanvas: React.FC = () => {
 
     // 1. Nebulae (Deep parallax)
     ctx.save();
+    // Parallax logic remains largely screen-space based
     ctx.translate(-camera.x * 0.1 + CANVAS_WIDTH / 2, -camera.y * 0.1 + CANVAS_HEIGHT / 2);
     nebulaeRef.current.forEach(n => {
         // Culling
@@ -458,32 +464,45 @@ const GameCanvas: React.FC = () => {
     });
     ctx.globalAlpha = 1;
     ctx.restore();
+  };
 
+  const drawGridAndWorld = (ctx: CanvasRenderingContext2D, state: GameState, zoom: number) => {
     // 3. Grid (World locked) - More subtle
     const gridSize = 150;
-    const offsetX = -camera.x % gridSize;
-    const offsetY = -camera.y % gridSize;
+    
+    // We are in World Space here due to outer transform, so we can draw lines across the arena
+    // Visible World Bounds
+    const visibleWidth = CANVAS_WIDTH / zoom;
+    const visibleHeight = CANVAS_HEIGHT / zoom;
+    const left = state.camera.x - visibleWidth / 2;
+    const right = state.camera.x + visibleWidth / 2;
+    const top = state.camera.y - visibleHeight / 2;
+    const bottom = state.camera.y + visibleHeight / 2;
+
+    const startX = Math.floor(left / gridSize) * gridSize;
+    const startY = Math.floor(top / gridSize) * gridSize;
 
     ctx.strokeStyle = 'rgba(0, 255, 255, 0.08)'; // Very subtle cyan
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1; // Keep thin even if zoomed? No, in world space 1 is 1 unit.
+    // To keep line width consistent on screen (1px), we divide by zoom
+    ctx.lineWidth = 1 / zoom; 
+
     ctx.beginPath();
-    for (let x = offsetX; x < CANVAS_WIDTH; x += gridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, CANVAS_HEIGHT);
+    for (let x = startX; x < right; x += gridSize) {
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
     }
-    for (let y = offsetY; y < CANVAS_HEIGHT; y += gridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(CANVAS_WIDTH, y);
+    for (let y = startY; y < bottom; y += gridSize) {
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
     }
     ctx.stroke();
 
     // 4. Arena Boundary
-    ctx.save();
-    ctx.translate(-camera.x + CANVAS_WIDTH / 2, -camera.y + CANVAS_HEIGHT / 2);
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
     ctx.strokeStyle = '#ff0055';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 / zoom;
     ctx.setLineDash([20, 20]); // Dashed border
     ctx.stroke();
     // Inner Glow
@@ -491,11 +510,11 @@ const GameCanvas: React.FC = () => {
     ctx.shadowColor = '#ff0055';
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS - 5, 0, Math.PI * 2);
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 / zoom;
     ctx.strokeStyle = 'rgba(255, 0, 85, 0.5)';
     ctx.setLineDash([]);
     ctx.stroke();
-    ctx.restore();
+    ctx.shadowBlur = 0; // Reset
   };
 
   const drawRadar = (ctx: CanvasRenderingContext2D, state: GameState) => {
@@ -544,10 +563,6 @@ const GameCanvas: React.FC = () => {
              ctx.save();
              ctx.translate(x, y);
              ctx.rotate(e.rotation);
-             // Radar aligns with map, so rotation is straightforward relative to North? 
-             // Map is XY, Radar is XY. Rotation matches.
-             // BUT, visually on radar, 0 rads is right. Player rotation 0 rads is right.
-             // Arrow should point right.
              ctx.moveTo(4, 0);
              ctx.lineTo(-3, 3);
              ctx.lineTo(-3, -3);
@@ -616,29 +631,36 @@ const GameCanvas: React.FC = () => {
     state.camera.x = state.player.position.x;
     state.camera.y = state.player.position.y;
 
-    // Clear handled by drawBackground fill
+    // Draw Background (Screen Space)
+    drawStarfield(ctx, state.camera);
 
-    drawBackground(ctx, state.camera);
-
-    // World Transforms
+    // World Transforms with ZOOM
     ctx.save();
-    ctx.translate(-state.camera.x + CANVAS_WIDTH / 2, -state.camera.y + CANVAS_HEIGHT / 2);
+    
+    // 1. Move origin to center of screen
+    ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+    // 2. Apply Scale
+    ctx.scale(zoomLevel, zoomLevel);
+    // 3. Move world so camera is at origin
+    ctx.translate(-state.camera.x, -state.camera.y);
+
+    // Draw Grid & Boundaries
+    drawGridAndWorld(ctx, state, zoomLevel);
 
     // Draw Layers
     state.particles.forEach(p => drawEntity(ctx, p));
     state.projectiles.forEach(p => drawEntity(ctx, p));
     state.entities.forEach(e => drawEntity(ctx, e));
     
-    // Draw player (even if dead, to show drift/explosion aftermath if any)
+    // Draw player
     drawEntity(ctx, state.player);
 
     ctx.restore();
 
-    // UI Layer
+    // UI Layer (Screen Space)
     drawRadar(ctx, state);
 
     // Sync HUD
-    // Update if timer ticks OR if state changed significantly (e.g. Game Over) to prevent UI freeze
     if (state.lastTime % 10 === 0 || state.gameOver !== hudState.gameOver) {
       setHudState({
         score: state.score,
@@ -657,10 +679,12 @@ const GameCanvas: React.FC = () => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [audioStarted]);
+  }, [audioStarted, zoomLevel]); // Re-bind loop if zoom changes (though ref based state helps, simpler to just rebind or rely on ref)
 
   const handleRestart = () => {
-      handleStartAudio();
+      // Don't toggle zoom on restart, just restart
+      if (!audioStarted) handleClick(); // ensure audio
+      
       gameStateRef.current.player = createPlayer();
       gameStateRef.current.entities = [];
       gameStateRef.current.projectiles = [];
@@ -687,12 +711,12 @@ const GameCanvas: React.FC = () => {
   };
 
   return (
-    <div className="relative w-full h-full" onClick={handleStartAudio}>
+    <div className="relative w-full h-full" onClick={handleClick}>
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}
         height={CANVAS_HEIGHT}
-        className="block w-full h-full"
+        className="block w-full h-full cursor-crosshair"
       />
       
       {/* Scanlines Effect */}
@@ -715,6 +739,7 @@ const GameCanvas: React.FC = () => {
         <div className="text-sm">SECTOR: 7G</div>
         <div className="text-sm">WAVE: {hudState.wave}</div>
         <div className="text-sm mt-2">SCORE: {hudState.score.toString().padStart(6, '0')}</div>
+        <div className="text-xs text-cyan-500 mt-2">ZOOM: {zoomLevel}x</div>
       </div>
 
       {/* Shield/Health Bars */}
@@ -747,7 +772,7 @@ const GameCanvas: React.FC = () => {
               <p className="text-green-400 mb-6 font-mono">FINAL SCORE: {hudState.score}</p>
               <button 
                 onClick={(e) => { e.stopPropagation(); handleRestart(); }}
-                className="px-6 py-2 bg-red-900/50 hover:bg-red-800 text-red-100 font-mono border border-red-500 uppercase tracking-widest transition-all shadow-[0_0_15px_rgba(255,0,0,0.6)]"
+                className="px-6 py-2 bg-red-900/50 hover:bg-red-800 text-red-100 font-mono border border-red-500 uppercase tracking-widest transition-all shadow-[0_0_15px_rgba(255,0,0,0.6)] cursor-pointer pointer-events-auto"
               >
                 Re-Initialize Sequence
               </button>

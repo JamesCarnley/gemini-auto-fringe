@@ -32,3 +32,10 @@ export const clampPosition = (pos: Vector2, radius: number): Vector2 => {
   }
   return pos;
 };
+
+// Predict where the target will be when a projectile at speed `projSpeed` reaches it
+export const predictTargetPosition = (shooterPos: Vector2, targetPos: Vector2, targetVel: Vector2, projSpeed: number): Vector2 => {
+  const distance = dist(shooterPos, targetPos);
+  const timeToImpact = distance / projSpeed;
+  return add(targetPos, mult(targetVel, timeToImpact));
+};
